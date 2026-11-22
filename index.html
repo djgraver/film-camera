@@ -6,37 +6,96 @@
 <meta name="theme-color" content="#000000">
 <title>35</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
+  :root {
+    --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px);
+    --engrave: #d9d2c1;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
   body {
     touch-action: none; -webkit-user-select: none; user-select: none;
     -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #d8d2c4;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--engrave);
+    /* black tolex: pebbled leatherette, plus soft studio lighting across the body */
+    background-color: #0c0c0c;
+    background-image:
+      radial-gradient(ellipse at 30% 20%, rgba(255,255,255,.05), transparent 60%),
+      radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%),
+      var(--tolex);
+    background-size: 100% 100%, 100% 100%, 180px 180px;
   }
-  #vf { position: absolute; overflow: hidden; background: #070707; }
+
+  /* viewfinder window, recessed into the body */
+  #vf { position: absolute; overflow: hidden; background: #050505; border-radius: 6px;
+        box-shadow: 0 0 0 2px #000, 0 0 0 3px rgba(255,255,255,.07), 0 6px 18px rgba(0,0,0,.8); }
   #vf video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
-  #stock {
-    position: fixed; right: 0; bottom: 0; z-index: 5;
-    padding: 18px calc(18px + env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) 24px;
-    font-size: 10px; letter-spacing: .24em; opacity: .5; white-space: nowrap;
-  }
-  #msg {
-    position: fixed; left: 0; right: 0; top: 50%; transform: translateY(-50%); z-index: 6;
-    text-align: center; font-size: 11px; letter-spacing: .2em; opacity: .7; display: none; pointer-events: none;
-  }
-  #err {
-    position: fixed; left: 0; bottom: 0; z-index: 6; pointer-events: none;
-    padding: 18px calc(18px + env(safe-area-inset-left)) calc(18px + env(safe-area-inset-bottom));
-    font-size: 10px; letter-spacing: .2em; color: #e0604a; opacity: 0;
-  }
-  #flash { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 10; }
+  #vf::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+               box-shadow: inset 0 3px 8px rgba(0,0,0,.85), inset 0 0 0 1px rgba(0,0,0,.9); }
+  #blackout { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 2; }
+  #msg { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); z-index: 3;
+         text-align: center; font-size: 11px; letter-spacing: .2em; opacity: .75; display: none; pointer-events: none; }
+
+  /* control deck */
+  #ctrl { position: absolute; display: flex; align-items: center; justify-content: space-evenly; }
+  body.land #ctrl { flex-direction: column; }
+  .engraved { font-size: 10px; letter-spacing: .26em; color: var(--engrave); opacity: .78; white-space: nowrap;
+              text-shadow: 0 -1px 0 rgba(0,0,0,.95), 0 1px 0 rgba(255,255,255,.07); }
+
+  /* film-simulation dial */
+  #dialWrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #dialIndex { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+               border-top: 8px solid var(--engrave); filter: drop-shadow(0 -1px 0 #000); opacity: .9; }
+  #dialBox { position: relative; border-radius: 50%; touch-action: none;
+             box-shadow: 0 6px 10px rgba(0,0,0,.85), 0 2px 3px rgba(0,0,0,.9), 0 0 0 2px #050505; }
+  #dial { position: absolute; inset: 0; transition: transform .12s ease-out; will-change: transform; }
+  #dial.dragging { transition: none; }
+  #dial svg { width: 100%; height: 100%; display: block; }
+  #dialGloss { position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+               background: radial-gradient(circle at 34% 26%, rgba(255,255,255,.16), transparent 45%),
+                           radial-gradient(circle at 70% 85%, rgba(0,0,0,.35), transparent 55%); }
+
+  /* shutter release */
+  #shutter { position: relative; border: 0; padding: 0; margin: 0; background: none; border-radius: 50%;
+             outline: none; cursor: pointer; touch-action: none; }
+  #shutter .well { position: absolute; inset: 0; border-radius: 50%;
+                   background: radial-gradient(circle, #060606 0 66%, #000 70%);
+                   box-shadow: inset 0 4px 8px rgba(0,0,0,.95), 0 1px 0 rgba(255,255,255,.08), 0 -1px 0 rgba(0,0,0,.9); }
+  #shutter .collar { position: absolute; inset: 9%; border-radius: 50%;
+                     background: conic-gradient(from 210deg, #f2f2f2, #868686 12%, #e6e6e6 26%, #6c6c6c 42%,
+                                 #dadada 56%, #777 70%, #efefef 84%, #8a8a8a 94%, #f2f2f2);
+                     box-shadow: 0 3px 5px rgba(0,0,0,.9), inset 0 0 0 1px rgba(0,0,0,.55); }
+  #shutter .collar::before { content: ''; position: absolute; inset: 0; border-radius: 50%;
+                     background: repeating-conic-gradient(rgba(0,0,0,.42) 0 1.6deg, rgba(255,255,255,.18) 1.6deg 3.2deg);
+                     -webkit-mask: radial-gradient(circle, transparent 0 78%, #000 80%);
+                             mask: radial-gradient(circle, transparent 0 78%, #000 80%); }
+  #shutter .collar::after { content: ''; position: absolute; inset: 21%; border-radius: 50%;
+                     background: #0a0a0a; box-shadow: inset 0 2px 3px rgba(0,0,0,.95), 0 1px 0 rgba(255,255,255,.35); }
+  #shutter .cap { position: absolute; inset: 27%; border-radius: 50%; z-index: 1;
+                  background:
+                    repeating-radial-gradient(circle, rgba(0,0,0,.05) 0 1px, rgba(255,255,255,.05) 1px 2px),
+                    radial-gradient(circle at 50% 38%, #8d8d8d 0, #b9b9b9 30%, #ececec 62%, #ffffff 74%, #9c9c9c 100%);
+                  box-shadow: 0 4px 5px rgba(0,0,0,.75), inset 0 1px 1px rgba(255,255,255,.95), inset 0 -2px 3px rgba(0,0,0,.35); }
+  #shutter .cap::after { content: ''; position: absolute; inset: 40%; border-radius: 50%;
+                  background: radial-gradient(circle at 50% 35%, #111, #444);
+                  box-shadow: inset 0 1px 2px #000, 0 1px 0 rgba(255,255,255,.6); }
+  #shutter.down .cap { transform: translateY(2px) scale(.965);
+                  box-shadow: 0 1px 1px rgba(0,0,0,.8), inset 0 1px 1px rgba(255,255,255,.8), inset 0 -1px 2px rgba(0,0,0,.35); }
+
+  #err { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; pointer-events: none; text-align: center;
+         padding-bottom: calc(10px + var(--sab)); font-size: 10px; letter-spacing: .2em; color: #e0604a; opacity: 0; }
 </style>
 </head>
 <body>
-<div id="vf"><video id="video" playsinline muted autoplay></video></div>
-<div id="stock"></div>
-<div id="msg"></div>
+<div id="vf"><video id="video" playsinline muted autoplay></video><div id="blackout"></div><div id="msg"></div></div>
+<div id="ctrl">
+  <div id="dialWrap">
+    <div id="dialIndex"></div>
+    <div id="dialBox"><div id="dial"></div><div id="dialGloss"></div></div>
+    <div id="stock" class="engraved"></div>
+  </div>
+  <button id="shutter" aria-label="Take photo"><span class="well"></span><span class="collar"></span><span class="cap"></span></button>
+</div>
 <div id="err"></div>
-<div id="flash"></div>
 
 <script>
 (() => {
@@ -244,7 +303,8 @@ void main(){
  *  DOM + state
  * ------------------------------------------------------------------ */
 const $ = (id) => document.getElementById(id);
-const video = $('video'), vf = $('vf'), stockEl = $('stock'), msgEl = $('msg'), errEl = $('err'), flashEl = $('flash');
+const video = $('video'), vf = $('vf'), stockEl = $('stock'), msgEl = $('msg'), errEl = $('err');
+const blackoutEl = $('blackout'), ctrl = $('ctrl'), dialBox = $('dialBox'), dialEl = $('dial'), shutterEl = $('shutter');
 
 let stockIndex = 0;
 try { const s = localStorage.getItem('film35.stock'); const i = STOCKS.findIndex(x => x.id === s); if (i >= 0) stockIndex = i; } catch (e) {}
@@ -253,11 +313,6 @@ let stream = null, imageCapture = null, photoSettings = {}, takePhotoFailures = 
 let busy = false, lastShot = 0, starting = false, wakeLock = null;
 
 function showStock() { stockEl.textContent = STOCKS[stockIndex].name; }
-function cycleStock() {
-  stockIndex = (stockIndex + 1) % STOCKS.length;
-  try { localStorage.setItem('film35.stock', STOCKS[stockIndex].id); } catch (e) {}
-  showStock();
-}
 function message(text) { msgEl.textContent = text || ''; msgEl.style.display = text ? 'block' : 'none'; }
 let errTimer = 0;
 function error(text) {
@@ -265,13 +320,138 @@ function error(text) {
   clearTimeout(errTimer); errTimer = setTimeout(() => { errEl.style.opacity = '0'; }, 3000);
 }
 
-function layout() {
-  const W = innerWidth, H = innerHeight;
-  const ar = H > W ? 2 / 3 : 3 / 2;
-  let w = W, h = W / ar;
-  if (h > H) { h = H; w = H * ar; }
-  Object.assign(vf.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
+/* ------------------------------------------------------------------ *
+ *  Black tolex texture (pebbled leatherette), generated once
+ * ------------------------------------------------------------------ */
+const TOLEX = `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'>
+<filter id='t' x='0' y='0' width='100%' height='100%' color-interpolation-filters='sRGB'>
+<feTurbulence type='fractalNoise' baseFrequency='0.38' numOctaves='3' seed='11' stitchTiles='stitch' result='n'/>
+<feDiffuseLighting in='n' surfaceScale='2.4' diffuseConstant='1' lighting-color='#2a2a2a' result='l'>
+<feDistantLight azimuth='235' elevation='58'/></feDiffuseLighting>
+<feComponentTransfer in='l'><feFuncR type='gamma' amplitude='1' exponent='1.7'/><feFuncG type='gamma' amplitude='1' exponent='1.7'/><feFuncB type='gamma' amplitude='1' exponent='1.7'/></feComponentTransfer>
+</filter><rect width='180' height='180' filter='url(#t)'/></svg>`;
+document.body.style.setProperty('--tolex', `url("data:image/svg+xml,${encodeURIComponent(TOLEX)}")`);
+
+/* ------------------------------------------------------------------ *
+ *  Layout: viewfinder at the top of the phone, controls in the rest.
+ *  In landscape the "top" ends up on the left or right.
+ * ------------------------------------------------------------------ */
+const probe = document.createElement('div');
+probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:var(--sat) var(--sar) var(--sab) var(--sal)';
+document.body.appendChild(probe);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const px = (v) => Math.round(v) + 'px';
+
+function landSide() {
+  let a = screen.orientation ? screen.orientation.angle : window.orientation;
+  if (a === undefined || a === null) a = 90;
+  return (a === 270 || a === -90) ? 'right' : 'left';
 }
+
+function layout() {
+  const W = innerWidth, H = innerHeight, cs = getComputedStyle(probe);
+  const sT = parseFloat(cs.paddingTop) || 0, sB = parseFloat(cs.paddingBottom) || 0;
+  const sL = parseFloat(cs.paddingLeft) || 0, sR = parseFloat(cs.paddingRight) || 0;
+  const pad = 14, land = W > H;
+  document.body.classList.toggle('land', land);
+  let vx, vy, vw, vh, cx, cy, cw, ch, D, S;
+  if (!land) {
+    const minCtrl = Math.max(190, H * 0.24);
+    vw = W - sL - sR - pad * 2; vh = vw * 1.5;
+    const maxH = H - sT - sB - pad * 2 - minCtrl;
+    if (vh > maxH) { vh = maxH; vw = vh / 1.5; }
+    vx = (W - vw) / 2; vy = sT + pad;
+    cx = sL; cy = vy + vh + pad; cw = W - sL - sR; ch = H - sB - cy;
+    D = clamp(Math.min(ch * 0.9 - 44, cw * 0.4), 70, 132);
+    S = clamp(Math.min(ch * 0.62, cw * 0.32), 64, 112);
+  } else {
+    const minCtrl = Math.max(170, W * 0.21);
+    vh = H - sT - sB - pad * 2; vw = vh * 1.5;
+    const maxW = W - sL - sR - pad * 2 - minCtrl;
+    if (vw > maxW) { vw = maxW; vh = vw / 1.5; }
+    vy = (H - vh) / 2;
+    const left = landSide() === 'left';
+    vx = left ? sL + pad : W - sR - pad - vw;
+    cx = left ? vx + vw + pad : sL; cw = left ? W - sR - cx : vx - pad - sL;
+    cy = sT; ch = H - sT - sB;
+    D = clamp(Math.min(cw * 0.62, (ch - 70) * 0.5), 64, 124);
+    S = clamp(Math.min(cw * 0.5, (ch - 70) * 0.4), 60, 108);
+  }
+  Object.assign(vf.style, { left: px(vx), top: px(vy), width: px(vw), height: px(vh) });
+  Object.assign(ctrl.style, { left: px(cx), top: px(cy), width: px(cw), height: px(ch) });
+  Object.assign(dialBox.style, { width: px(D), height: px(D) });
+  Object.assign(shutterEl.style, { width: px(S), height: px(S) });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Film-simulation dial
+ * ------------------------------------------------------------------ */
+const STEP = 360 / STOCKS.length;
+let dialRot = -stockIndex * STEP;
+const mod = (a, n) => ((a % n) + n) % n;
+
+function buildDial() {
+  const font = `font-family="ui-monospace,Menlo,Consolas,monospace" font-weight="700" text-anchor="middle"`;
+  let s = `<svg viewBox="-100 -100 200 200" xmlns="http://www.w3.org/2000/svg"><defs>
+    <radialGradient id="dg" cx="50%" cy="45%" r="60%"><stop offset="0" stop-color="#383838"/><stop offset=".7" stop-color="#1b1b1b"/><stop offset="1" stop-color="#0f0f0f"/></radialGradient>
+    <radialGradient id="cg" cx="42%" cy="36%" r="70%"><stop offset="0" stop-color="#4c4c4c"/><stop offset="1" stop-color="#141414"/></radialGradient>
+  </defs><circle r="99.5" fill="#0a0a0a"/>`;
+  for (let i = 0; i < 120; i++) {                       // knurled edge
+    const a = i * 3 * Math.PI / 180, c = Math.cos(a), n = Math.sin(a);
+    s += `<line x1="${(c * 87).toFixed(2)}" y1="${(n * 87).toFixed(2)}" x2="${(c * 99).toFixed(2)}" y2="${(n * 99).toFixed(2)}" stroke="${i % 2 ? '#3d3d3d' : '#040404'}" stroke-width="2.3"/>`;
+  }
+  s += `<circle r="86.5" fill="url(#dg)" stroke="#000" stroke-width="1.6"/>`;
+  for (let r = 33; r < 86; r += 2.6)                      // machined rings
+    s += `<circle r="${r.toFixed(1)}" fill="none" stroke="rgba(255,255,255,${(0.012 + Math.random() * 0.022).toFixed(3)})" stroke-width=".7"/>`;
+  STOCKS.forEach((st, i) => {
+    s += `<g transform="rotate(${i * STEP})">
+      <circle cy="-78" r="1.7" fill="#d9d2c1"/>
+      <text y="-56.8" font-size="15.5" ${font} fill="#000" opacity=".95">${st.id}</text>
+      <text y="-56" font-size="15.5" ${font} fill="#d9d2c1">${st.id}</text></g>`;
+  });
+  s += `<circle r="31" fill="url(#cg)" stroke="#000" stroke-width="1.4"/><circle r="28" fill="none" stroke="rgba(255,255,255,.09)" stroke-width=".8"/>
+    <text y="3" font-size="8" letter-spacing="1.5" ${font} fill="#8d877a">FILM</text></svg>`;
+  dialEl.innerHTML = s;
+}
+function setDial() { dialEl.style.transform = `rotate(${dialRot}deg)`; }
+function selectStock(i) {
+  if (i === stockIndex) return;
+  stockIndex = i;
+  try { localStorage.setItem('film35.stock', STOCKS[i].id); } catch (e) {}
+  showStock(); detent();
+}
+
+let drag = null;
+const pAngle = (e) => Math.atan2(e.clientY - drag.cy, e.clientX - drag.cx) * 180 / Math.PI;
+dialBox.addEventListener('pointerdown', (e) => {
+  e.preventDefault(); audio();
+  dialBox.setPointerCapture(e.pointerId);
+  const r = dialBox.getBoundingClientRect();
+  drag = { id: e.pointerId, cx: r.left + r.width / 2, cy: r.top + r.height / 2, x: e.clientX, y: e.clientY, moved: false };
+  drag.last = pAngle(e);
+  dialEl.classList.add('dragging');
+});
+dialBox.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+  drag.moved = true;
+  const a = pAngle(e);
+  dialRot += mod(a - drag.last + 180, 360) - 180;
+  drag.last = a;
+  setDial();
+  selectStock(mod(Math.round(-dialRot / STEP), STOCKS.length));
+});
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  dialEl.classList.remove('dragging');
+  if (!drag.moved) dialRot += (drag.x < drag.cx ? 1 : -1) * STEP;   // tap left = back, right = forward
+  dialRot = Math.round(dialRot / STEP) * STEP;
+  setDial();
+  selectStock(mod(Math.round(-dialRot / STEP), STOCKS.length));
+  drag = null;
+}
+dialBox.addEventListener('pointerup', endDrag);
+dialBox.addEventListener('pointercancel', endDrag);
 
 /* ------------------------------------------------------------------ *
  *  Camera
@@ -390,9 +570,13 @@ function shutterSound() {
   thump(t + 0.085, 0.35, 140, 50, 0.07);
   click(t + 0.13, 0.18, 4500, 0.03);
 }
+function detent() {
+  if (audio()) click(ac.currentTime + 0.002, 0.22, 5200, 0.012);
+  if (navigator.vibrate) navigator.vibrate(6);
+}
 function blackout() {
-  flashEl.style.opacity = '1';
-  setTimeout(() => { flashEl.style.opacity = '0'; }, 110);
+  blackoutEl.style.opacity = '1';
+  setTimeout(() => { blackoutEl.style.opacity = '0'; }, 110);
 }
 
 /* ------------------------------------------------------------------ *
@@ -575,16 +759,14 @@ function shoot() {
 /* ------------------------------------------------------------------ *
  *  Input
  * ------------------------------------------------------------------ */
-const SHUTTER_KEYS = new Set(['AudioVolumeUp', 'VolumeUp', 'Enter', ' ', 'Camera']);
-window.addEventListener('keydown', (e) => {
-  if (SHUTTER_KEYS.has(e.key) || e.keyCode === 175 || e.keyCode === 24) {
-    e.preventDefault();
-    if (!e.repeat) shoot();
-  }
-}, true);
-
-stockEl.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); cycleStock(); });
-document.addEventListener('pointerdown', (e) => { e.preventDefault(); shoot(); });
+shutterEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  shutterEl.classList.add('down');
+  try { shutterEl.setPointerCapture(e.pointerId); } catch (err) {}
+  shoot();
+});
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach(t => shutterEl.addEventListener(t, () => shutterEl.classList.remove('down')));
+vf.addEventListener('pointerdown', () => { if (!stream) startCamera(); });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 document.addEventListener('visibilitychange', () => {
@@ -592,11 +774,13 @@ document.addEventListener('visibilitychange', () => {
   else { startCamera(); keepAwake(); }
 });
 addEventListener('resize', layout);
+if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(layout, 50));
+addEventListener('orientationchange', () => setTimeout(layout, 50));
 
 /* for offline testing of the film look */
 window.__film = { STOCKS, develop, makeDamage };
 
-layout(); showStock();
+buildDial(); setDial(); layout(); showStock();
 if (!new URLSearchParams(location.search).has('test')) { startCamera(); keepAwake(); }
 })();
 </script>
