@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>35</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
+  body {
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #d8d2c4;
+  }
+  #vf { position: absolute; overflow: hidden; background: #070707; }
+  #vf video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  #stock {
+    position: fixed; right: 0; bottom: 0; z-index: 5;
+    padding: 18px calc(18px + env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) 24px;
+    font-size: 10px; letter-spacing: .24em; opacity: .5; white-space: nowrap;
+  }
+  #msg {
+    position: fixed; left: 0; right: 0; top: 50%; transform: translateY(-50%); z-index: 6;
+    text-align: center; font-size: 11px; letter-spacing: .2em; opacity: .7; display: none; pointer-events: none;
+  }
+  #err {
+    position: fixed; left: 0; bottom: 0; z-index: 6; pointer-events: none;
+    padding: 18px calc(18px + env(safe-area-inset-left)) calc(18px + env(safe-area-inset-bottom));
+    font-size: 10px; letter-spacing: .2em; color: #e0604a; opacity: 0;
+  }
+  #flash { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="vf"><video id="video" playsinline muted autoplay></video></div>
+<div id="stock"></div>
+<div id="msg"></div>
+<div id="err"></div>
+<div id="flash"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ------------------------------------------------------------------ *
+ *  Film stocks — Fujifilm film-simulation inspired.
+ *  wb: white-balance multiplier       sat: global saturation
+ *  cs/ch: shadow / highlight contrast (0 = linear, + harder, - softer)
+ *  black/white: output floor / ceiling (film base & paper white)
+ *  tS/tH: colour added into shadows / highlights (split tone)
+ *  bands: [hueShift°, satMul, valShift] for R, Y, G, C, B, M
+ *  grain: grain strength   cgrain: share of colour (dye) grain
+ *  hal: halation strength  vig: lens vignette
+ * ------------------------------------------------------------------ */
+const N = [0, 1, 0];
+const STOCKS = [
+  { id: 'CN', name: 'CLASSIC NEG',
+    wb: [1.0, 0.995, 0.985], sat: 0.92, cs: 0.55, ch: 0.25, black: 0.035, white: 0.955,
+    tS: [-0.04, 0.012, 0.03], tH: [0.028, 0.004, -0.03],
+    bands: [[-6, 1.05, -0.02], [-8, 0.85, 0], [16, 0.8, -0.06], [0, 0.9, -0.02], [-6, 0.9, -0.06], [0, 0.85, 0]],
+    grain: 0.07, cgrain: 0.35, hal: 0.08, vig: 0.18 },
+  { id: 'CC', name: 'CLASSIC CHROME',
+    wb: [1.01, 1.0, 0.985], sat: 0.75, cs: 0.6, ch: -0.05, black: 0.02, white: 0.96,
+    tS: [-0.015, 0.0, 0.012], tH: [0.02, 0.01, -0.012],
+    bands: [[4, 0.85, -0.05], [-6, 0.72, -0.02], [-10, 0.7, -0.04], [-4, 0.8, -0.04], [-10, 0.82, -0.1], [0, 0.7, 0]],
+    grain: 0.06, cgrain: 0.3, hal: 0.06, vig: 0.16 },
+  { id: 'NN', name: 'NOSTALGIC NEG',
+    wb: [1.03, 1.0, 0.95], sat: 1.0, cs: 0.1, ch: 0.2, black: 0.03, white: 0.965,
+    tS: [0.006, 0.0, -0.004], tH: [0.035, 0.015, -0.03],
+    bands: [[3, 1.0, 0], [-4, 1.05, 0.02], [-8, 0.82, -0.02], [0, 0.9, 0], [4, 0.88, -0.02], [0, 0.9, 0]],
+    grain: 0.065, cgrain: 0.35, hal: 0.08, vig: 0.16 },
+  { id: 'PV', name: 'PROVIA',
+    wb: [1, 1, 1], sat: 1.06, cs: 0.25, ch: 0.15, black: 0.012, white: 0.985,
+    tS: [0, 0, 0.006], tH: [0.004, 0.002, 0],
+    bands: [[0, 1.05, 0], N, [2, 1.05, 0], [0, 1.05, 0], [-3, 1.08, -0.03], N],
+    grain: 0.05, cgrain: 0.3, hal: 0.05, vig: 0.14 },
+  { id: 'VV', name: 'VELVIA',
+    wb: [1.0, 0.99, 1.0], sat: 1.18, cs: 0.55, ch: 0.3, black: 0.0, white: 0.99,
+    tS: [0.005, -0.01, 0.02], tH: [0.005, 0.0, -0.005],
+    bands: [[-3, 1.05, -0.04], [2, 1.0, 0], [8, 1.25, -0.1], [4, 1.2, -0.06], [6, 1.25, -0.12], [0, 1.15, -0.04]],
+    grain: 0.045, cgrain: 0.25, hal: 0.05, vig: 0.2 },
+  { id: 'AS', name: 'ASTIA',
+    wb: [1.005, 1.0, 0.99], sat: 1.08, cs: 0.12, ch: -0.2, black: 0.018, white: 0.975,
+    tS: [0, 0, 0.008], tH: [0.012, 0.006, 0],
+    bands: [[2, 1.0, 0.04], [-3, 0.95, 0.02], [4, 1.05, 0], [0, 1.1, 0], [-2, 1.15, 0], N],
+    grain: 0.05, cgrain: 0.3, hal: 0.05, vig: 0.12 },
+  { id: 'ET', name: 'ETERNA',
+    wb: [1.0, 1.0, 0.99], sat: 0.68, cs: -0.15, ch: -0.3, black: 0.035, white: 0.95,
+    tS: [-0.012, 0.008, 0.014], tH: [0.01, 0.006, -0.006],
+    bands: [[2, 0.85, 0], [-4, 0.8, 0], [14, 0.75, -0.04], [0, 0.85, 0], [-6, 0.85, -0.04], [0, 0.8, 0]],
+    grain: 0.05, cgrain: 0.3, hal: 0.06, vig: 0.14 },
+  { id: 'AC', name: 'ACROS', mono: 1, mix: [0.34, 0.55, 0.11],
+    wb: [1, 1, 1], sat: 1, cs: 0.4, ch: 0.25, black: 0.012, white: 0.98,
+    tS: [0, 0, 0], tH: [0, 0, 0], bands: [N, N, N, N, N, N],
+    grain: 0.085, cgrain: 0, hal: 0.04, halC: [1, 1, 1], vig: 0.18 },
+];
+
+/* ------------------------------------------------------------------ *
+ *  Shaders
+ * ------------------------------------------------------------------ */
+const VS = `
+attribute vec2 aPos;
+void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const FS = `
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uOut, uTexel, uCropOff, uCropScale, uSeed;
+uniform float uRot, uRef;
+uniform vec3 uWB, uTS, uTH, uMix, uHalC;
+uniform float uSat, uCS, uCH, uBlack, uWhite, uMono, uGrain, uCGrain, uHal, uVig;
+uniform vec3 uBand[6];
+uniform vec4 uScrA[3];
+uniform vec4 uScrB[3];
+uniform vec4 uDust[12];
+
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  float a = hash12(i), b = hash12(i+vec2(1.0,0.0)), c = hash12(i+vec2(0.0,1.0)), d = hash12(i+vec2(1.0,1.0));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
+vec3 rgb2hsv(vec3 c){
+  vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y); float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0*d + e)), d / (q.x + e), q.x);
+}
+vec3 hsv2rgb(vec3 c){
+  vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float curve(float x){
+  x = clamp(x, 0.0, 1.0);
+  return x < 0.5 ? 0.5*pow(2.0*x, 1.0 + uCS) : 1.0 - 0.5*pow(2.0*(1.0 - x), 1.0 + uCH);
+}
+vec2 toSrc(vec2 o){
+  vec2 u = uCropOff + o * uCropScale;
+  if (uRot > 0.5) return vec2(u.y, 1.0 - u.x);
+  if (uRot < -0.5) return vec2(1.0 - u.y, u.x);
+  return u;
+}
+float hl(vec2 s){ return smoothstep(0.72, 1.0, luma(texture2D(uTex, s).rgb)); }
+
+void main(){
+  vec2 P = vec2(gl_FragCoord.x, uOut.y - gl_FragCoord.y);
+  vec2 o = P / uOut;
+  vec2 t = toSrc(o);
+
+  /* gentle softening: phone images are over-sharpened compared with a film scan */
+  vec2 tx = uTexel * 0.6;
+  vec3 c = texture2D(uTex, t).rgb * 0.6
+         + (texture2D(uTex, t + vec2(tx.x, 0.0)).rgb + texture2D(uTex, t - vec2(tx.x, 0.0)).rgb
+          + texture2D(uTex, t + vec2(0.0, tx.y)).rgb + texture2D(uTex, t - vec2(0.0, tx.y)).rgb) * 0.1;
+
+  /* halation: light bleeding back through the film base around bright areas */
+  vec2 h1 = uTexel * 7.0 * uRef;
+  float hm = hl(t + vec2(h1.x, 0.0)) + hl(t - vec2(h1.x, 0.0)) + hl(t + vec2(0.0, h1.y)) + hl(t - vec2(0.0, h1.y))
+           + hl(t + h1 * 1.414) + hl(t - h1 * 1.414) + hl(t + vec2(h1.x, -h1.y) * 1.414) + hl(t + vec2(-h1.x, h1.y) * 1.414);
+  hm *= 0.125;
+
+  c *= uWB;
+
+  /* hue-band colour response */
+  vec3 hsv = rgb2hsv(clamp(c, 0.0, 1.0));
+  float h = hsv.x * 360.0;
+  vec3 adj = vec3(0.0);
+  for (int i = 0; i < 6; i++) {
+    float d = abs(mod(h - float(i) * 60.0 + 180.0, 360.0) - 180.0);
+    adj += max(0.0, 1.0 - d / 60.0) * uBand[i];
+  }
+  hsv.x = fract((h + adj.x) / 360.0);
+  hsv.y = clamp(hsv.y * adj.y, 0.0, 1.0);
+  hsv.z = hsv.z * (1.0 + adj.z * hsv.y);
+  c = hsv2rgb(hsv);
+
+  float l = luma(c);
+  c = mix(vec3(l), c, uSat);
+  c = mix(c, vec3(dot(c, uMix)), uMono);
+
+  /* tone curve, split tone, halation, film base & paper white */
+  c = vec3(curve(c.r), curve(c.g), curve(c.b));
+  l = luma(c);
+  c += uTS * (1.0 - l) * (1.0 - l) + uTH * l * l;
+  c += uHalC * hm * uHal;
+  c = uBlack + (uWhite - uBlack) * clamp(c, 0.0, 1.0);
+
+  /* vignette */
+  float asp = uOut.x / uOut.y;
+  vec2 q = o - 0.5; q.x *= asp;
+  float r2 = dot(q, q) / (0.25 * (1.0 + asp * asp));
+  c *= 1.0 - uVig * pow(r2, 1.4);
+
+  /* grain: clumped, strongest in the midtones */
+  float gs = max(1.0, 1.4 * uRef);
+  vec2 gp = P / gs;
+  float g = (vnoise(gp + uSeed) - 0.5) * 0.8
+          + (vnoise(gp * 0.43 + uSeed.yx + 19.0) - 0.5) * 0.5
+          + (hash12(P + uSeed * 7.0) - 0.5) * 0.5;
+  l = luma(c);
+  float gw = 0.4 + 2.2 * l * (1.0 - l);
+  c += g * uGrain * gw;
+  if (uCGrain > 0.0) {
+    vec3 cg = vec3(hash12(P + uSeed + 1.7), hash12(P + uSeed + 5.3), hash12(P + uSeed + 9.1)) - 0.5;
+    c += cg * uGrain * uCGrain * gw;
+  }
+
+  /* scratches, running along the length of the film */
+  float W = uOut.x, H = uOut.y;
+  float L = max(W, H), S = min(W, H);
+  float A = W >= H ? P.x : P.y;
+  float C = W >= H ? P.y : P.x;
+  for (int i = 0; i < 3; i++) {
+    vec4 a = uScrA[i]; vec4 b = uScrB[i];
+    if (a.z == 0.0) continue;
+    float c0 = a.x * S + b.z * uRef * sin(A / L * b.w * 6.2832 + a.w);
+    float d = abs(C - c0) / max(0.6, a.y * uRef);
+    if (d > 4.0) continue;
+    float seg = smoothstep(b.x * L, b.x * L + 0.03 * L, A) * (1.0 - smoothstep(b.y * L - 0.03 * L, b.y * L, A));
+    float flick = smoothstep(0.2, 0.55, vnoise(vec2(A / (220.0 * max(uRef, 0.3)), float(i) * 13.0 + uSeed.x)));
+    float m = exp(-d * d) * seg * flick;
+    if (a.z > 0.0) c = mix(c, vec3(1.0), m * a.z); else c *= 1.0 + m * a.z;
+  }
+
+  /* dust: white specks (dust on a negative prints light), the odd dark one */
+  for (int i = 0; i < 12; i++) {
+    vec4 d = uDust[i];
+    if (d.w == 0.0) continue;
+    float r = max(0.7, d.z * uRef);
+    float dist = length(P - d.xy * uOut);
+    if (dist > r * 2.0) continue;
+    float n = vnoise(P / max(r * 0.6, 0.8) + float(i) * 7.3);
+    float m = 1.0 - smoothstep(r * 0.55, r, dist * (0.75 + 0.5 * n));
+    if (d.w > 0.0) c = mix(c, vec3(0.96), m * d.w); else c *= 1.0 + m * d.w;
+  }
+
+  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+
+/* ------------------------------------------------------------------ *
+ *  DOM + state
+ * ------------------------------------------------------------------ */
+const $ = (id) => document.getElementById(id);
+const video = $('video'), vf = $('vf'), stockEl = $('stock'), msgEl = $('msg'), errEl = $('err'), flashEl = $('flash');
+
+let stockIndex = 0;
+try { const s = localStorage.getItem('film35.stock'); const i = STOCKS.findIndex(x => x.id === s); if (i >= 0) stockIndex = i; } catch (e) {}
+
+let stream = null, imageCapture = null, photoSettings = {}, takePhotoFailures = 0;
+let busy = false, lastShot = 0, starting = false, wakeLock = null;
+
+function showStock() { stockEl.textContent = STOCKS[stockIndex].name; }
+function cycleStock() {
+  stockIndex = (stockIndex + 1) % STOCKS.length;
+  try { localStorage.setItem('film35.stock', STOCKS[stockIndex].id); } catch (e) {}
+  showStock();
+}
+function message(text) { msgEl.textContent = text || ''; msgEl.style.display = text ? 'block' : 'none'; }
+let errTimer = 0;
+function error(text) {
+  errEl.textContent = text; errEl.style.opacity = '1';
+  clearTimeout(errTimer); errTimer = setTimeout(() => { errEl.style.opacity = '0'; }, 3000);
+}
+
+function layout() {
+  const W = innerWidth, H = innerHeight;
+  const ar = H > W ? 2 / 3 : 3 / 2;
+  let w = W, h = W / ar;
+  if (h > H) { h = H; w = H * ar; }
+  Object.assign(vf.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Camera
+ * ------------------------------------------------------------------ */
+async function startCamera() {
+  if (stream || starting) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { message('CAMERA NEEDS HTTPS'); return; }
+  starting = true;
+  try {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
+        facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1920 }, aspectRatio: { ideal: 4 / 3 } } });
+    } catch (e) {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'environment' } });
+    }
+  } catch (e) {
+    starting = false; stream = null;
+    message('NO CAMERA · TAP TO RETRY');
+    return;
+  }
+  const track = stream.getVideoTracks()[0];
+  track.addEventListener('ended', () => { if (stream && stream.getVideoTracks()[0] === track) stopCamera(); });
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) {}
+
+  imageCapture = null; photoSettings = {}; takePhotoFailures = 0;
+  if ('ImageCapture' in window) {
+    try {
+      imageCapture = new ImageCapture(track);
+      const caps = await imageCapture.getPhotoCapabilities();
+      if (caps.fillLightMode && caps.fillLightMode.includes('off')) photoSettings.fillLightMode = 'off'; // no flash, ever
+      if (caps.redEyeReduction === 'controllable') photoSettings.redEyeReduction = false;
+    } catch (e) { /* keep imageCapture, settings optional */ }
+  }
+  starting = false;
+  message('');
+}
+
+function stopCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; imageCapture = null; video.srcObject = null;
+}
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+
+/* Which way the full-resolution photo needs turning to match the viewfinder */
+function rotationFor(bmp) {
+  if (!video.videoWidth) return 0;
+  const vPortrait = video.videoHeight > video.videoWidth, pPortrait = bmp.height > bmp.width;
+  if (vPortrait === pPortrait) return 0;
+  const angle = (screen.orientation && screen.orientation.angle) || 0;
+  return (angle === 180 || angle === 270) ? -1 : 1;
+}
+
+async function grab() {
+  if (imageCapture && stream && stream.getVideoTracks()[0].readyState === 'live') {
+    try {
+      const blob = await imageCapture.takePhoto(photoSettings);
+      const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      takePhotoFailures = 0;
+      return { bmp, rot: rotationFor(bmp) };
+    } catch (e) {
+      if (++takePhotoFailures >= 2) imageCapture = null; // fall back to frame grabs for this session
+    }
+  }
+  if (!video.videoWidth) throw new Error('no frame');
+  return { bmp: await createImageBitmap(video), rot: 0 };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Shutter: sound + blackout
+ * ------------------------------------------------------------------ */
+let ac = null, noiseBuf = null;
+function audio() {
+  if (!ac) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ac = new AC();
+    const len = (ac.sampleRate * 0.4) | 0;
+    noiseBuf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+function click(t, gain, freq, dur) {
+  const s = ac.createBufferSource(); s.buffer = noiseBuf;
+  const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 0.9;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.002);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f); f.connect(g); g.connect(ac.destination);
+  s.start(t, Math.random() * 0.3); s.stop(t + dur + 0.02);
+}
+function thump(t, gain, f0, f1, dur) {
+  const o = ac.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.003);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function shutterSound() {
+  if (!audio()) return;
+  const t = ac.currentTime + 0.005;
+  click(t, 0.9, 3200, 0.035);        // mirror up / first curtain
+  thump(t, 0.5, 180, 60, 0.06);
+  click(t + 0.012, 0.35, 6500, 0.02);
+  click(t + 0.085, 0.7, 2400, 0.05); // second curtain / mirror return
+  thump(t + 0.085, 0.35, 140, 50, 0.07);
+  click(t + 0.13, 0.18, 4500, 0.03);
+}
+function blackout() {
+  flashEl.style.opacity = '1';
+  setTimeout(() => { flashEl.style.opacity = '0'; }, 110);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Scratches & dust (one persistent "camera" scratch per roll)
+ * ------------------------------------------------------------------ */
+const rnd = Math.random;
+function makeScratch(full) {
+  const st = full ? 0 : (rnd() < 0.5 ? 0 : rnd() * 0.5);
+  const en = full ? 1 : Math.min(1, st + 0.25 + rnd() * (1 - st));
+  const light = rnd() < 0.8;
+  return { a: [rnd(), 0.5 + rnd(), (light ? 1 : -1) * (0.04 + rnd() * 0.1), rnd() * 6.283],
+           b: [st, en, 0.5 + rnd() * 3, 0.5 + rnd() * 2] };
+}
+const rollScratch = rnd() < 0.5 ? (() => { const s = makeScratch(true); s.a[2] = 0.05; return s; })() : null;
+
+function makeDamage() {
+  const scr = [];
+  if (rollScratch && rnd() < 0.7) {
+    const s = { a: rollScratch.a.slice(), b: rollScratch.b.slice() };
+    s.a[0] += (rnd() - 0.5) * 0.004; scr.push(s);
+  }
+  const extra = rnd() < 0.5 ? 0 : (rnd() < 0.7 ? 1 : 2);
+  for (let i = 0; i < extra && scr.length < 3; i++) scr.push(makeScratch(false));
+  const A = new Float32Array(12), B = new Float32Array(12);
+  scr.forEach((s, i) => { A.set(s.a, i * 4); B.set(s.b, i * 4); });
+
+  const D = new Float32Array(48);
+  const n = 1 + Math.floor(Math.pow(rnd(), 1.5) * 7);
+  for (let i = 0; i < n; i++) {
+    const dark = rnd() < 0.1;
+    D.set([rnd(), rnd(), 1.0 + rnd() * rnd() * 4.0, (dark ? -0.5 : 1) * (0.18 + rnd() * 0.35)], i * 4);
+  }
+  return { A, B, D };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Develop (WebGL)
+ * ------------------------------------------------------------------ */
+let gl = null, glCanvas = null, prog = null, U = {}, maxTex = 4096, maxOut = 4096;
+
+function initGL() {
+  if (gl && !gl.isContextLost()) return;
+  glCanvas = document.createElement('canvas');
+  gl = glCanvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: false, alpha: false, premultipliedAlpha: false });
+  if (!gl) throw new Error('WebGL unavailable');
+  const sh = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  U = {};
+  const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const info = gl.getActiveUniform(prog, i);
+    const name = info.name.replace(/\[0\]$/, '');
+    U[name] = gl.getUniformLocation(prog, info.name);
+  }
+  maxTex = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192);
+  const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+  maxOut = Math.min(vp[0], vp[1], gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), 8192);
+}
+
+async function develop(job) {
+  initGL();
+  let { bmp } = job; const { rot, stock } = job;
+  let sw = bmp.width, sh = bmp.height;
+  if (Math.max(sw, sh) > maxTex) {
+    const s = maxTex / Math.max(sw, sh);
+    const nb = await createImageBitmap(bmp, { resizeWidth: Math.floor(sw * s), resizeHeight: Math.floor(sh * s), resizeQuality: 'high' });
+    bmp.close(); bmp = nb; sw = bmp.width; sh = bmp.height;
+  }
+
+  /* crop to the 3:2 frame of a 35mm negative */
+  const uw = rot ? sh : sw, uh = rot ? sw : sh;
+  const ar = uw >= uh ? 3 / 2 : 2 / 3;
+  let cw = uw, ch = uh;
+  if (cw / ch > ar) cw = ch * ar; else ch = cw / ar;
+  let ow = Math.round(cw), oh = Math.round(ch);
+  if (Math.max(ow, oh) > maxOut) { const s = maxOut / Math.max(ow, oh); ow = Math.floor(ow * s); oh = Math.floor(oh * s); }
+  glCanvas.width = ow; glCanvas.height = oh;
+  if (gl.drawingBufferWidth < ow || gl.drawingBufferHeight < oh) {
+    const s = Math.min(gl.drawingBufferWidth / ow, gl.drawingBufferHeight / oh);
+    ow = Math.floor(ow * s); oh = Math.floor(oh * s);
+    glCanvas.width = ow; glCanvas.height = oh;
+  }
+  gl.viewport(0, 0, ow, oh);
+
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  bmp.close();
+
+  const dmg = job.damage || makeDamage();
+  const f = (n, v) => U[n] && gl.uniform1f(U[n], v);
+  const v2 = (n, a, b) => U[n] && gl.uniform2f(U[n], a, b);
+  const v3 = (n, a) => U[n] && gl.uniform3fv(U[n], a);
+  gl.uniform1i(U.uTex, 0);
+  v2('uOut', ow, oh);
+  v2('uTexel', 1 / sw, 1 / sh);
+  v2('uCropOff', (uw - cw) / 2 / uw, (uh - ch) / 2 / uh);
+  v2('uCropScale', cw / uw, ch / uh);
+  v2('uSeed', rnd() * 500, rnd() * 500);
+  f('uRot', rot); f('uRef', Math.max(ow, oh) / 4000);
+  v3('uWB', stock.wb); v3('uTS', stock.tS); v3('uTH', stock.tH);
+  v3('uMix', stock.mix || [0.2126, 0.7152, 0.0722]);
+  v3('uHalC', stock.halC || [1.0, 0.38, 0.18]);
+  f('uSat', stock.sat); f('uCS', stock.cs); f('uCH', stock.ch);
+  f('uBlack', stock.black); f('uWhite', stock.white); f('uMono', stock.mono || 0);
+  f('uGrain', stock.grain); f('uCGrain', stock.cgrain); f('uHal', stock.hal); f('uVig', stock.vig);
+  gl.uniform3fv(U.uBand, new Float32Array(stock.bands.flat()));
+  gl.uniform4fv(U.uScrA, dmg.A); gl.uniform4fv(U.uScrB, dmg.B); gl.uniform4fv(U.uDust, dmg.D);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const blob = await new Promise((res, rej) => glCanvas.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/jpeg', 0.92));
+  gl.deleteTexture(tex);
+  glCanvas.width = glCanvas.height = 1;
+  return blob;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Save
+ * ------------------------------------------------------------------ */
+const pad = (n) => String(n).padStart(2, '0');
+function save(blob, job) {
+  const d = job.time;
+  const name = `FUJI_${job.stock.id}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.style.display = 'none';
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 60000);
+}
+
+const queue = []; let developing = false;
+async function pump() {
+  if (developing) return;
+  developing = true;
+  while (queue.length) {
+    const job = queue.shift();
+    try { save(await develop(job), job); }
+    catch (e) { console.error(e); error('DEVELOP FAILED'); }
+  }
+  developing = false;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Shoot
+ * ------------------------------------------------------------------ */
+function shoot() {
+  const now = performance.now();
+  if (busy || now - lastShot < 300) return;
+  if (!stream) { startCamera(); return; }
+  busy = true; lastShot = now;
+  shutterSound(); blackout();
+  const job = { stock: STOCKS[stockIndex], time: new Date() };
+  grab()
+    .then(({ bmp, rot }) => { job.bmp = bmp; job.rot = rot; queue.push(job); pump(); })
+    .catch((e) => { console.error(e); error('CAPTURE FAILED'); })
+    .finally(() => { busy = false; });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Input
+ * ------------------------------------------------------------------ */
+const SHUTTER_KEYS = new Set(['AudioVolumeUp', 'VolumeUp', 'Enter', ' ', 'Camera']);
+window.addEventListener('keydown', (e) => {
+  if (SHUTTER_KEYS.has(e.key) || e.keyCode === 175 || e.keyCode === 24) {
+    e.preventDefault();
+    if (!e.repeat) shoot();
+  }
+}, true);
+
+stockEl.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); cycleStock(); });
+document.addEventListener('pointerdown', (e) => { e.preventDefault(); shoot(); });
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopCamera();
+  else { startCamera(); keepAwake(); }
+});
+addEventListener('resize', layout);
+
+/* for offline testing of the film look */
+window.__film = { STOCKS, develop, makeDamage };
+
+layout(); showStock();
+if (!new URLSearchParams(location.search).has('test')) { startCamera(); keepAwake(); }
+})();
+</script>
+</body>
+</html>
