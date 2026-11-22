@@ -28,7 +28,8 @@
   /* viewfinder window, recessed into the body */
   #vf { position: absolute; overflow: hidden; background: #050505; border-radius: 6px;
         box-shadow: 0 0 0 2px #000, 0 0 0 3px rgba(255,255,255,.07), 0 6px 18px rgba(0,0,0,.8); }
-  #vf video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  #vf video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; opacity: 0; }
+  #pv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
   #vf::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
                box-shadow: inset 0 3px 8px rgba(0,0,0,.85), inset 0 0 0 1px rgba(0,0,0,.9); }
   #blackout { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 2; }
@@ -86,7 +87,7 @@
 </style>
 </head>
 <body>
-<div id="vf"><video id="video" playsinline muted autoplay></video><div id="blackout"></div><div id="msg"></div></div>
+<div id="vf"><video id="video" playsinline muted autoplay></video><canvas id="pv"></canvas><div id="blackout"></div><div id="msg"></div></div>
 <div id="ctrl">
   <div id="dialWrap">
     <div id="dialIndex"></div>
@@ -162,7 +163,11 @@ attribute vec2 aPos;
 void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
 const FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
+#else
+precision mediump float;
+#endif
 uniform sampler2D uTex;
 uniform vec2 uOut, uTexel, uCropOff, uCropScale, uSeed;
 uniform float uRot, uRef;
@@ -378,6 +383,8 @@ function layout() {
     S = clamp(Math.min(cw * 0.5, (ch - 70) * 0.4), 60, 108);
   }
   Object.assign(vf.style, { left: px(vx), top: px(vy), width: px(vw), height: px(vh) });
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  pvCanvas.width = Math.round(vw * dpr); pvCanvas.height = Math.round(vh * dpr);
   Object.assign(ctrl.style, { left: px(cx), top: px(cy), width: px(cw), height: px(ch) });
   Object.assign(dialBox.style, { width: px(D), height: px(D) });
   Object.assign(shutterEl.style, { width: px(S), height: px(S) });
@@ -488,6 +495,7 @@ async function startCamera() {
   }
   starting = false;
   message('');
+  startPreview();
 }
 
 function stopCamera() {
@@ -615,19 +623,15 @@ function makeDamage() {
 /* ------------------------------------------------------------------ *
  *  Develop (WebGL)
  * ------------------------------------------------------------------ */
-let gl = null, glCanvas = null, prog = null, U = {}, maxTex = 4096, maxOut = 4096;
-
-function initGL() {
-  if (gl && !gl.isContextLost()) return;
-  glCanvas = document.createElement('canvas');
-  gl = glCanvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: false, alpha: false, premultipliedAlpha: false });
+function createRenderer(canvas, preserve) {
+  const gl = canvas.getContext('webgl', { preserveDrawingBuffer: preserve, antialias: false, alpha: false, premultipliedAlpha: false });
   if (!gl) throw new Error('WebGL unavailable');
   const sh = (type, src) => {
     const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
     return s;
   };
-  prog = gl.createProgram();
+  const prog = gl.createProgram();
   gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
   gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
   gl.linkProgram(prog);
@@ -639,65 +643,51 @@ function initGL() {
   const loc = gl.getAttribLocation(prog, 'aPos');
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  U = {};
+  const U = {};
   const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
   for (let i = 0; i < n; i++) {
     const info = gl.getActiveUniform(prog, i);
-    const name = info.name.replace(/\[0\]$/, '');
-    U[name] = gl.getUniformLocation(prog, info.name);
+    U[info.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(prog, info.name);
   }
-  maxTex = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192);
-  const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
-  maxOut = Math.min(vp[0], vp[1], gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), 8192);
-}
-
-async function develop(job) {
-  initGL();
-  let { bmp } = job; const { rot, stock } = job;
-  let sw = bmp.width, sh = bmp.height;
-  if (Math.max(sw, sh) > maxTex) {
-    const s = maxTex / Math.max(sw, sh);
-    const nb = await createImageBitmap(bmp, { resizeWidth: Math.floor(sw * s), resizeHeight: Math.floor(sh * s), resizeQuality: 'high' });
-    bmp.close(); bmp = nb; sw = bmp.width; sh = bmp.height;
-  }
-
-  /* crop to the 3:2 frame of a 35mm negative */
-  const uw = rot ? sh : sw, uh = rot ? sw : sh;
-  const ar = uw >= uh ? 3 / 2 : 2 / 3;
-  let cw = uw, ch = uh;
-  if (cw / ch > ar) cw = ch * ar; else ch = cw / ar;
-  let ow = Math.round(cw), oh = Math.round(ch);
-  if (Math.max(ow, oh) > maxOut) { const s = maxOut / Math.max(ow, oh); ow = Math.floor(ow * s); oh = Math.floor(oh * s); }
-  glCanvas.width = ow; glCanvas.height = oh;
-  if (gl.drawingBufferWidth < ow || gl.drawingBufferHeight < oh) {
-    const s = Math.min(gl.drawingBufferWidth / ow, gl.drawingBufferHeight / oh);
-    ow = Math.floor(ow * s); oh = Math.floor(oh * s);
-    glCanvas.width = ow; glCanvas.height = oh;
-  }
-  gl.viewport(0, 0, ow, oh);
-
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  bmp.close();
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+  return { canvas, gl, U, tex,
+    maxTex: Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192),
+    maxOut: Math.min(vp[0], vp[1], gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), 8192) };
+}
 
-  const dmg = job.damage || makeDamage();
+/* centred 3:2 crop of the (upright) source, as on a 35mm negative */
+function cropFor(sw, sh, rot) {
+  const uw = rot ? sh : sw, uh = rot ? sw : sh;
+  const ar = uw >= uh ? 3 / 2 : 2 / 3;
+  let cw = uw, ch = uh;
+  if (cw / ch > ar) cw = ch * ar; else ch = cw / ar;
+  return { uw, uh, cw, ch };
+}
+
+const NO_DAMAGE = { A: new Float32Array(12), B: new Float32Array(12), D: new Float32Array(48) };
+
+/* upload source into r.tex first, then call this to draw one frame */
+function render(r, o) {
+  const { gl, U } = r, { stock } = o, c = cropFor(o.sw, o.sh, o.rot);
   const f = (n, v) => U[n] && gl.uniform1f(U[n], v);
   const v2 = (n, a, b) => U[n] && gl.uniform2f(U[n], a, b);
   const v3 = (n, a) => U[n] && gl.uniform3fv(U[n], a);
+  gl.viewport(0, 0, o.ow, o.oh);
   gl.uniform1i(U.uTex, 0);
-  v2('uOut', ow, oh);
-  v2('uTexel', 1 / sw, 1 / sh);
-  v2('uCropOff', (uw - cw) / 2 / uw, (uh - ch) / 2 / uh);
-  v2('uCropScale', cw / uw, ch / uh);
+  v2('uOut', o.ow, o.oh);
+  v2('uTexel', 1 / o.sw, 1 / o.sh);
+  v2('uCropOff', (c.uw - c.cw) / 2 / c.uw, (c.uh - c.ch) / 2 / c.uh);
+  v2('uCropScale', c.cw / c.uw, c.ch / c.uh);
   v2('uSeed', rnd() * 500, rnd() * 500);
-  f('uRot', rot); f('uRef', Math.max(ow, oh) / 4000);
+  f('uRot', o.rot); f('uRef', o.ref);
   v3('uWB', stock.wb); v3('uTS', stock.tS); v3('uTH', stock.tH);
   v3('uMix', stock.mix || [0.2126, 0.7152, 0.0722]);
   v3('uHalC', stock.halC || [1.0, 0.38, 0.18]);
@@ -705,13 +695,67 @@ async function develop(job) {
   f('uBlack', stock.black); f('uWhite', stock.white); f('uMono', stock.mono || 0);
   f('uGrain', stock.grain); f('uCGrain', stock.cgrain); f('uHal', stock.hal); f('uVig', stock.vig);
   gl.uniform3fv(U.uBand, new Float32Array(stock.bands.flat()));
-  gl.uniform4fv(U.uScrA, dmg.A); gl.uniform4fv(U.uScrB, dmg.B); gl.uniform4fv(U.uDust, dmg.D);
-
+  const d = o.damage || NO_DAMAGE;
+  gl.uniform4fv(U.uScrA, d.A); gl.uniform4fv(U.uScrB, d.B); gl.uniform4fv(U.uDust, d.D);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
-  const blob = await new Promise((res, rej) => glCanvas.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/jpeg', 0.92));
-  gl.deleteTexture(tex);
-  glCanvas.width = glCanvas.height = 1;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Develop the full-resolution photo
+ * ------------------------------------------------------------------ */
+let dev = null;
+async function develop(job) {
+  if (!dev || dev.gl.isContextLost()) dev = createRenderer(document.createElement('canvas'), true);
+  const { gl, canvas } = dev;
+  let { bmp } = job; const { rot, stock } = job;
+  let sw = bmp.width, sh = bmp.height;
+  if (Math.max(sw, sh) > dev.maxTex) {
+    const s = dev.maxTex / Math.max(sw, sh);
+    const nb = await createImageBitmap(bmp, { resizeWidth: Math.floor(sw * s), resizeHeight: Math.floor(sh * s), resizeQuality: 'high' });
+    bmp.close(); bmp = nb; sw = bmp.width; sh = bmp.height;
+  }
+  const c = cropFor(sw, sh, rot);
+  let ow = Math.round(c.cw), oh = Math.round(c.ch);
+  if (Math.max(ow, oh) > dev.maxOut) { const s = dev.maxOut / Math.max(ow, oh); ow = Math.floor(ow * s); oh = Math.floor(oh * s); }
+  canvas.width = ow; canvas.height = oh;
+  if (gl.drawingBufferWidth < ow || gl.drawingBufferHeight < oh) {
+    const s = Math.min(gl.drawingBufferWidth / ow, gl.drawingBufferHeight / oh);
+    ow = Math.floor(ow * s); oh = Math.floor(oh * s);
+    canvas.width = ow; canvas.height = oh;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, dev.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+  bmp.close();
+  render(dev, { sw, sh, rot, ow, oh, ref: Math.max(ow, oh) / 4000, stock, damage: job.damage || makeDamage() });
+  const blob = await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/jpeg', 0.92));
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);   // free GPU memory
+  canvas.width = canvas.height = 1;
   return blob;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Live viewfinder: the same film look, on every camera frame
+ * ------------------------------------------------------------------ */
+const pvCanvas = $('pv');
+let pv = null, pvLoop = false;
+function startPreview() {
+  if (pv === false || pvLoop) return;
+  try { if (!pv || pv.gl.isContextLost()) pv = createRenderer(pvCanvas, false); }
+  catch (e) { console.error(e); pv = false; video.style.opacity = '1'; pvCanvas.style.display = 'none'; return; }
+  pvLoop = true;
+  const next = () => (video.requestVideoFrameCallback ? video.requestVideoFrameCallback(frame) : requestAnimationFrame(frame));
+  function frame() {
+    if (!stream || document.hidden || !pv) { pvLoop = false; return; }
+    if (video.readyState >= 2 && video.videoWidth) {
+      const { gl } = pv;
+      gl.bindTexture(gl.TEXTURE_2D, pv.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      render(pv, { sw: video.videoWidth, sh: video.videoHeight, rot: 0, ow: pvCanvas.width, oh: pvCanvas.height,
+                   ref: Math.max(pvCanvas.width, pvCanvas.height) / 4000, stock: STOCKS[stockIndex] });
+    }
+    next();
+  }
+  next();
 }
 
 /* ------------------------------------------------------------------ *
